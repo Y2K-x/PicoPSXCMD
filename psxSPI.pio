@@ -82,8 +82,24 @@ wait 0 pin 1	; wait for falling clock edge
 out pindirs 1	; output 1 bit (by changing pin direction)
 .wrap
 
+.program ack_sender
+; Set pins mapping:
+;		0 - ACK
+; Program Description:
+;		Sets ACK line low, waits for irq 1 to be lowered by cmd_reader.
+;		Timing is based on the first bit read by cmd_reader.
+.wrap_target
+irq wait 1 [31] ; 32 cycles delay (1 for instruction)
+nop [23] ; 24 cycles delay (1 for instruction), total of 56 cycles
+set pindirs, 1 [2] ; keep ack low for more than half PSX clock
+set pindirs, 0
+.wrap
+
 % c-sdk {
 #define SLOW_CLKDIV 50	// 125MHz divided down to 2.5 MHz - we need this so we don't count clocks not meant for us on systems like the PS2
+
+#define ACK_CLKDIV 86	// with pico default clock (125 Mhz) results in a frequency around 6 time greater than PSX SPI frequency
+#define ACK_IRQ 1
 
 static inline void sel_monitor_program_init(PIO pio, uint sm, uint offset, uint pin_sel) {
 	pio_sm_config c = sel_monitor_program_get_default_config(offset);
@@ -155,6 +171,19 @@ static inline void dat_writer_program_init(PIO pio, uint sm, uint offset, uint p
 	sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);	// join TX FIFO
 	/* Clock configuration */
 	sm_config_set_clkdiv_int_frac(&c, SLOW_CLKDIV, 0x00);
+	/* Initialize SM */
+	pio_sm_init(pio, sm, offset, &c);
+}
+
+static inline void ack_sender_program_init(PIO pio, uint sm, uint offset, uint pin_ack) {
+	pio_sm_config c = ack_sender_program_get_default_config(offset);
+	/* Pin Configuration */
+	sm_config_set_set_pins(&c, pin_ack, 1);							// set base SET pin (ACK)
+	pio_sm_set_pins_with_mask(pio, sm, 0x00000000, 1 << pin_ack);	// set ACK pin to low output
+	pio_sm_set_consecutive_pindirs(pio, sm, pin_ack, 1, false);		// set ACK pin as input (initial configuration)
+	pio_gpio_init(pio, pin_ack);									// init ACK pin
+	/* Clock Configuration */
+	sm_config_set_clkdiv_int_frac(&c, ACK_CLKDIV, 0x00);
 	/* Initialize SM */
 	pio_sm_init(pio, sm, offset, &c);
 }
